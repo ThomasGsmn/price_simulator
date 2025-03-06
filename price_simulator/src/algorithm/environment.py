@@ -100,7 +100,10 @@ class DiscreteSynchronEnvironment(EnvironmentStrategy):
         self.storage.set_up(len(self.agents), self.n_periods)
 
         for t in range(self.n_periods):
-
+            # Progress indicator
+            if t % 100 == 0:
+                print(f"Period {t}/{self.n_periods}")
+                
             # agents decide about there prices (hereafter is the state different)
             next_state = tuple(
                 agent.play_price(state, self.possible_prices, self.n_periods, t) for agent in self.agents
