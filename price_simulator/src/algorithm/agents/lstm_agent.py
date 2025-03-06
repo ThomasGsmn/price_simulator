@@ -1,77 +1,136 @@
 import attr
-import numpy as np
+import torch
 import random
-from keras.models import Sequential
-from keras.layers import Dense, LSTM
-from keras.optimizers import Adam
-from price_simulator.src.algorithm.agents.buffer import ReplayBuffer
+import numpy as np
+from torch import nn, optim
+from typing import List, Tuple
+
+# from price_simulator.src.algorithm.agents.buffer import ReplayBuffer
 from price_simulator.src.algorithm.agents.simple import AgentStrategy
-from price_simulator.src.algorithm.policies import ExplorationStrategy, DecreasingEpsilonGreedy
+from price_simulator.src.algorithm.policies import EpsilonGreedy, ExplorationStrategy
+
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, output_size)
+    
+    def forward(self, x):
+        h0 = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
+        c0 = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.fc1(out[:, -1, :])
+        out = self.fc2(out)
+        return out
 
 @attr.s
-class LSTM_Agent(AgentStrategy):
-    qnetwork_local = attr.ib(default=None)
-    qnetwork_target = attr.ib(default=None)
-    replay_memory = attr.ib(factory=ReplayBuffer)
-    update_target_after = attr.ib(default=100)
-    batch_size = attr.ib(default=32)
-    update_counter = attr.ib(default=0)
-    hidden_nodes = attr.ib(default=32)
-    decision = attr.ib(factory=DecreasingEpsilonGreedy)
-    discount = attr.ib(default=0.95)
-    learning_rate = attr.ib(default=0.001)
-    
-    def __attrs_post_init__(self):
-        if not self.qnetwork_local or not self.qnetwork_target:
-            self.qnetwork_local = self.initialize_network()
-            self.qnetwork_target = self.initialize_network()
-            self.qnetwork_target.set_weights(self.qnetwork_local.get_weights())
+class SimpleLSTMAgent(AgentStrategy):
+    """Simplified LSTM Agent using sequences of past states"""
 
-    def initialize_network(self):
-        model = Sequential()
-        model.add(LSTM(self.hidden_nodes, input_shape=(1, self.hidden_nodes), activation='relu'))  # Adjust input shape
-        model.add(Dense(self.hidden_nodes, activation='relu'))
-        model.add(Dense(1, activation='linear'))
-        model.compile(loss='mse', optimizer=Adam(lr=self.learning_rate))
-        return model
+    # LSTM Network
+    lstm: LSTMModel = attr.ib(default=None)
+    hidden_nodes: int = attr.ib(default=32)
+    sequence_length: int = attr.ib(default=5)  # Number of past states to use
+    state_history: List[Tuple[float, ...]] = attr.ib(factory=list)
 
-    def play_price(self, state, action_space, n_period, t):
+    # General
+    decision: ExplorationStrategy = attr.ib(factory=EpsilonGreedy)
+    discount: float = attr.ib(default=0.95)
+    learning_rate: float = attr.ib(default=0.1)
+
+    @discount.validator
+    def check_discount(self, attribute, value):
+        if not 0 <= value <= 1:
+            raise ValueError("Discount factor must lie in [0,1]")
+
+    @learning_rate.validator
+    def check_learning_rate(self, attribute, value):
+        if not 0 <= value < 1:
+            raise ValueError("Learning rate must lie in [0,1)")
+
+    def who_am_i(self) -> str:
+        return type(self).__name__ + " (gamma: {}, alpha: {}, policy: {}, quality: {}, mc: {})".format(
+            self.discount, self.learning_rate, self.decision.who_am_i(), self.quality, self.marginal_cost
+        )
+
+    def update_state_history(self, state: Tuple[float]):
+        """Update the history of states with the new state."""
+        self.state_history.append(state)
+        if len(self.state_history) > self.sequence_length:
+            self.state_history.pop(0)
+
+    def play_price(self, state: Tuple[float], action_space: List[float], n_period: int, t: int) -> float:
+        """Returns an action by either following greedy policy or experimentation."""
+
+        # Update state history
+        self.update_state_history(state)
+
+        # Initialize LSTM network if necessary
+        if not self.lstm:
+            self.lstm = self.initialize_network(len(state), len(action_space))
+
+        # Play action
         if self.decision.explore(n_period, t):
-            action = random.choice(action_space)
+            return random.choice(action_space)
         else:
-            state = np.reshape(state, [1, 1, len(state)])  # Reshape for LSTM input
-            action_values = self.qnetwork_local.predict(state)
-            action = action_space[np.argmax(action_values[0])]
-        return action
-
+            # Use state history as input to the LSTM network
+            states_input = torch.tensor(self.scale_sequence(self.state_history, action_space)).float().unsqueeze(0)
+            action_values = self.lstm(states_input).detach().numpy()
+            if sum(np.isclose(action_values[0], action_values[0].max())) > 1:
+                optimal_action_index = np.random.choice(
+                    np.flatnonzero(np.isclose(action_values[0], action_values[0].max()))
+                )
+            else:
+                optimal_action_index = np.argmax(action_values[0])
+            return action_space[optimal_action_index]
+        
     def learn(
         self,
-        previous_reward,
-        reward,
-        previous_action,
-        action,
-        action_space,
-        previous_state,
-        state,
-        next_state,
+        previous_reward: float,
+        reward: float,
+        previous_action: float,
+        action: float,
+        action_space: List[float],
+        previous_state: Tuple[float],
+        state: Tuple[float],
+        next_state: Tuple[float],
     ):
-        try:
-            action = np.where(np.array(action_space) == action)[0][0]
-            previous_state = np.reshape(previous_state, [1, 1, len(previous_state)])  # Reshape for LSTM input
-            state = np.reshape(state, [1, 1, len(state)])  # Reshape for LSTM input
-            next_state = np.reshape(next_state, [1, 1, len(next_state)])  # Reshape for LSTM input
-            self.replay_memory.add(previous_state, action, reward, next_state)
-            
-            if len(self.replay_memory) > self.batch_size:
-                states, actions, rewards, next_states = self.replay_memory.sample(self.batch_size)
-                targets = rewards + self.discount * np.amax(self.qnetwork_target.predict(next_states), axis=1)
-                targets_full = self.qnetwork_local.predict(states)
-                ind = np.array([i for i in range(self.batch_size)])
-                targets_full[[ind], [actions]] = targets
-                self.qnetwork_local.fit(states, targets_full, epochs=1, verbose=0)
-                self.update_counter += 1
-                if self.update_counter == self.update_target_after:
-                    self.qnetwork_target.set_weights(self.qnetwork_local.get_weights())
-                    self.update_counter = 0
-        except Exception as e:
-            print(f"An error occurred during learning: {e}")
+        """Update the LSTM network based on the observed rewards and actions."""
+        # Update state history with the current state
+        self.update_state_history(state)
+
+        # Scale the input sequences
+        states_input = torch.tensor(self.scale_sequence(self.state_history, action_space)).float().unsqueeze(0)
+        next_states_input = torch.tensor(self.scale_sequence([next_state], action_space)).float().unsqueeze(0)
+
+        # Compute the target Q-values using the Bellman equation
+        next_optimal_q = self.lstm(next_states_input).max().item()
+        target = reward + self.discount * next_optimal_q
+
+        # Get the local estimates from the LSTM network
+        local_estimates = self.lstm(states_input)
+        action_idx = np.atleast_1d(action_space == action).nonzero()[0]
+        local_estimates[0, action_idx] = target
+
+        # Update the LSTM network using backpropagation
+        optimizer = optim.Adam(self.lstm.parameters(), lr=self.learning_rate)
+        optimizer.zero_grad()
+        loss = nn.MSELoss()(local_estimates, local_estimates.clone().detach())
+        loss.backward()
+        optimizer.step()
+        # Debugging: Print loss and target values
+        print(f"Loss: {loss.item()}, Target: {target}, Local Estimates: {local_estimates[0, action_idx].item()}")
+
+    def initialize_network(self, n_agents: int, n_actions: int):
+        """Create a neural network with one output node per possible action"""
+        return LSTMModel(input_size=n_agents, hidden_size=self.hidden_nodes, output_size=n_actions)
+
+    def scale_sequence(self, sequences: List[Tuple], action_space: List) -> np.array:
+        """Scale float input sequences to range from 0 to 1."""
+        max_action = max(action_space)
+        min_action = min(action_space)
+        return np.array([
+            np.multiply(np.divide(np.array(seq) - min_action, max_action - min_action), 1) for seq in sequences
+        ])
