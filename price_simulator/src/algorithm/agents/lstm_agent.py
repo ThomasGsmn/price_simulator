@@ -112,12 +112,13 @@ class SimpleLSTMAgent(AgentStrategy):
         # Get the local estimates from the LSTM network
         local_estimates = self.lstm(states_input)
         action_idx = np.atleast_1d(action_space == action).nonzero()[0]
-        local_estimates[0, action_idx] = target
+        target_tensor = local_estimates.clone().detach()
+        target_tensor[0, action_idx] = target
 
         # Update the LSTM network using backpropagation
         optimizer = optim.Adam(self.lstm.parameters(), lr=self.learning_rate)
         optimizer.zero_grad()
-        loss = nn.MSELoss()(local_estimates, local_estimates.clone().detach())
+        loss = nn.MSELoss()(local_estimates, target_tensor)
         loss.backward()
         optimizer.step()
         # Debugging: Print loss and target values
