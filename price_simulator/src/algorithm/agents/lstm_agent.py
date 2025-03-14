@@ -40,6 +40,8 @@ class SimpleLSTMAgent(AgentStrategy):
     discount: float = attr.ib(default=0.95)
     learning_rate: float = attr.ib(default=0.1)
 
+    loss_history: List[float] = attr.ib(factory=list, init=False)
+
     @discount.validator
     def check_discount(self, attribute, value):
         if not 0 <= value <= 1:
@@ -56,6 +58,8 @@ class SimpleLSTMAgent(AgentStrategy):
         )
 
     def update_state_history(self, state: Tuple[float]):
+        if not isinstance(self.state_history, list):
+            self.state_history = []
         """Update the history of states with the new state."""
         self.state_history.append(state)
         if len(self.state_history) > self.sequence_length:
@@ -101,9 +105,11 @@ class SimpleLSTMAgent(AgentStrategy):
         # Update state history with the current state
         self.update_state_history(state)
 
+        # Create a sequence of state history length for the next state
+        next_state_history = self.state_history[-self.sequence_length:] + [next_state]
         # Scale the input sequences
         states_input = torch.tensor(self.scale_sequence(self.state_history, action_space)).float().unsqueeze(0)
-        next_states_input = torch.tensor(self.scale_sequence([next_state], action_space)).float().unsqueeze(0)
+        next_states_input = torch.tensor(self.scale_sequence(next_state_history, action_space)).float().unsqueeze(0)
 
         # Compute the target Q-values using the Bellman equation
         next_optimal_q = self.lstm(next_states_input).max().item()
@@ -121,6 +127,8 @@ class SimpleLSTMAgent(AgentStrategy):
         loss = nn.MSELoss()(local_estimates, target_tensor)
         loss.backward()
         optimizer.step()
+        # Store the loss value
+        self.loss_history.append(loss.item())
         # Debugging: Print loss and target values
         print(f"Loss: {loss.item()}, Target: {target}, Local Estimates: {local_estimates[0, action_idx].item()}")
 
