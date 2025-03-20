@@ -5,7 +5,7 @@ import numpy as np
 from torch import nn, optim
 from typing import List, Tuple
 
-# from price_simulator.src.algorithm.agents.buffer import ReplayBuffer
+from price_simulator.src.algorithm.agents.buffer import SequentialReplayBuffer
 from price_simulator.src.algorithm.agents.simple import AgentStrategy
 from price_simulator.src.algorithm.policies import EpsilonGreedy, ExplorationStrategy
 
@@ -58,6 +58,7 @@ class SimpleLSTMAgent(AgentStrategy):
         )
 
     def update_state_history(self, state: Tuple[float]):
+        #ToDo: make more versatile to use in other agents
         if not isinstance(self.state_history, list):
             self.state_history = []
         """Update the history of states with the new state."""
@@ -143,3 +144,111 @@ class SimpleLSTMAgent(AgentStrategy):
         return np.array([
             np.multiply(np.divide(np.array(seq) - min_action, max_action - min_action), 1) for seq in sequences
         ])
+    
+
+@attr.s
+class LSTMReplayAgent(SimpleLSTMAgent):
+    """LSTM Agent with Replay Buffer and Target Network"""
+
+    # Replay Buffer
+    replay_buffer: SequentialReplayBuffer = attr.ib(factory=lambda: SequentialReplayBuffer(buffer_size=10000))
+    batch_size: int = attr.ib(default=32)
+
+    # Target and Local Networks
+    target_network: LSTMModel = attr.ib(default=None)
+    update_target_after: int = attr.ib(default=100)
+    update_counter: int = attr.ib(default=0)
+
+    def initialize_network(self, n_agents: int, n_actions: int):
+        """Initialize both local and target networks."""
+        local_network = super().initialize_network(n_agents, n_actions)
+        target_network = super().initialize_network(n_agents, n_actions)
+        target_network.load_state_dict(local_network.state_dict())  # Synchronize weights
+        self.target_network = target_network
+        return local_network
+
+    def add_experience(self, state_sequence, action, reward):
+        """Add a new experience to the replay buffer."""
+        self.replay_buffer.add(state_sequence, action, reward)
+
+    def sample_experiences(self):
+        """Sample a batch of experiences from the replay buffer."""
+        return self.replay_buffer.sample(self.batch_size, self.sequence_length)
+
+    def learn(
+        self,
+        previous_reward: float,
+        reward: float,
+        previous_action: float,
+        action: float,
+        action_space: List[float],
+        previous_state: Tuple[float],
+        state: Tuple[float],
+        next_state: Tuple[float],
+    ):
+        """Train the LSTM network using replay buffer and target network."""
+        # Add the current experience to the replay buffer
+        self.replay_buffer.add(state, action, reward)
+        
+        # Ensure the buffer has enough data to sample sequences
+        required_size = self.batch_size + self.sequence_length
+        if len(self.replay_buffer) < required_size:
+            print(f"Warm-up: Not enough experiences in the buffer to train. Current size: {len(self.replay_buffer)}")
+            return
+
+        # Sample a batch of experiences
+        states, actions, rewards, next_states = self.sample_experiences()
+        
+        # Scale the sampled states and next states
+        states = self.scale_sequence(states, self.action_space)
+        next_states = self.scale_sequence(next_states, self.action_space)
+        
+        # Convert to tensors
+        states_input = torch.tensor(states).float()
+        next_states_input = torch.tensor(next_states).float()
+        actions_tensor = torch.tensor([self.action_space.index(a) for a in actions])
+        rewards_tensor = torch.tensor(rewards).float()
+
+        # Compute target Q-values using the target network
+        with torch.no_grad():
+            next_q_values = self.target_network(next_states_input).max(dim=1)[0]
+            targets = rewards_tensor + self.discount * next_q_values
+
+        # Get current Q-values from the local network
+        local_q_values = self.lstm(states_input)
+        predicted_q_values = local_q_values.gather(1, actions_tensor.unsqueeze(1)).squeeze()
+
+        # Compute loss
+        loss = nn.MSELoss()(predicted_q_values, targets)
+
+        # Perform gradient descent step
+        optimizer = optim.Adam(self.lstm.parameters(), lr=self.learning_rate)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Update the target network periodically
+        self.update_counter += 1
+        if self.update_counter >= self.update_target_after:
+            self.target_network.load_state_dict(self.lstm.state_dict())
+            self.update_counter = 0
+            print("Target network updated.")
+
+        # Store the loss value
+        self.loss_history.append(loss.item())
+        print(f"Loss: {loss.item()}")
+
+    def play_price(self, state: Tuple[float], action_space: List[float], n_period: int, t: int) -> float:
+        """Returns an action by either following greedy policy or experimentation."""
+        self.update_state_history(state)
+
+        if not self.lstm:
+            self.lstm = self.initialize_network(len(state), len(action_space))
+            self.action_space = action_space  # Save action space for indexing
+
+        if self.decision.explore(n_period, t):
+            return random.choice(action_space)
+        else:
+            states_input = torch.tensor(self.scale_sequence(self.state_history, action_space)).float().unsqueeze(0)
+            action_values = self.lstm(states_input).detach().numpy()
+            return action_space[np.argmax(action_values)]
