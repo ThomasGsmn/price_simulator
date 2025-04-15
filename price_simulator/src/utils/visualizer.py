@@ -31,3 +31,40 @@ def create_subplot(yy: List, label: str, ax=None, agg: bool = False):
     ax.set(xlabel="Period", ylabel=label)
 
     return ax
+
+def visualize_results(env):
+    """Visualize loss history, price history, and reward history for the given environment."""
+    # Plot loss history
+    plt.figure(figsize=(12, 6))
+    plt.plot(env.agents[0].loss_history, label="Agent 1 Loss")
+    plt.title("Loss History")
+    plt.xlabel("Training Steps")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
+
+    # Analyze and visualize results
+    price_history_agent_1 = [price[0] for price in env.price_history]
+    price_history_agent_2 = [price[1] for price in env.price_history]
+
+    # Plot price history
+    plt.figure(figsize=(12, 6))
+    plt.plot(price_history_agent_1, label="Agent 1")
+    plt.plot(price_history_agent_2, label="Agent 2")
+    plt.title("Price History: Agent 1 vs Agent 2")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.show()
+
+    # Plot reward history
+    reward_history_agent_1 = [reward[0] for reward in env.reward_history]
+    reward_history_agent_2 = [reward[1] for reward in env.reward_history]
+    plt.figure(figsize=(12, 6))
+    plt.plot(reward_history_agent_1, label="Agent 1")
+    plt.plot(reward_history_agent_2, label="Agent 2")
+    plt.title("Reward History: Agent 1 vs Agent 2")
+    plt.xlabel("Time")
+    plt.ylabel("Reward")
+    plt.legend()
+    plt.show()
