@@ -69,6 +69,14 @@ class AlwaysDefectAgent(AgentStrategy):
 
 
 @attr.s
+class AlwaysMaxAgent(AlwaysDefectAgent):
+    """Agent that always plays maximum price"""
+
+    def play_price(self, state: Tuple, action_space: List, n_period: int, t: int):
+        """Always play the highest possible price."""
+        return max(action_space)
+
+@attr.s
 class RandomAgent(AlwaysDefectAgent):
     """Agent that plays random prices"""
 
