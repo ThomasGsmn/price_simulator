@@ -39,7 +39,7 @@ class SimpleLSTMAgent(AgentStrategy):
     # General
     decision: ExplorationStrategy = attr.ib(factory=EpsilonGreedy)
     discount: float = attr.ib(default=0.95)
-    learning_rate: float = attr.ib(default=0.1)
+    learning_rate: float = attr.ib(default=0.001)
 
     # Debugging
     debug: bool = attr.ib(default=False)
