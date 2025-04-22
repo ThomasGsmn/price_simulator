@@ -32,25 +32,38 @@ def create_subplot(yy: List, label: str, ax=None, agg: bool = False):
 
     return ax
 
-def visualize_results(env):
+def visualize_results(env, showAgent1: bool = True, showAgent2: bool = True):
     """Visualize loss history, price history, and reward history for the given environment."""
-    # Plot loss history
-    plt.figure(figsize=(12, 6))
-    plt.plot(env.agents[0].loss_history, label="Agent 1 Loss")
-    plt.title("Loss History")
-    plt.xlabel("Training Steps")
-    plt.ylabel("Loss")
-    plt.legend()
-    plt.show()
+   
+    # Plot loss history if it exists
+    if hasattr(env.agents[0], "loss_history"):
+        plt.figure(figsize=(12, 6))
+        plt.plot(env.agents[0].loss_history, label="Agent 1 Loss")
+        plt.title("Loss History")
+        plt.xlabel("Training Steps")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.show()
+    else:
+        print("Loss history attribute not found for Agent 1.")
 
     # Analyze and visualize results
     price_history_agent_1 = [price[0] for price in env.price_history]
     price_history_agent_2 = [price[1] for price in env.price_history]
 
-    # Plot price history
+    # Plot price history with monopoly and Nash prices
     plt.figure(figsize=(12, 6))
-    plt.plot(price_history_agent_1, label="Agent 1")
-    plt.plot(price_history_agent_2, label="Agent 2")
+    if showAgent1:
+        plt.plot(price_history_agent_1, label="Agent 1")
+    if showAgent2:
+        plt.plot(price_history_agent_2, label="Agent 2")
+    
+    # Add monopoly and Nash prices if they exist in the environment
+    if hasattr(env, "monopoly_prices"):
+        plt.axhline(y=env.monopoly_prices[0], color="red", linestyle="--", label=f"Monopoly Price Agent {1}")
+    if hasattr(env, "nash_prices"):
+        plt.axhline(y=env.nash_prices[0], color="green", linestyle="--", label=f"Nash Price Agent {1}")
+    
     plt.title("Price History: Agent 1 vs Agent 2")
     plt.xlabel("Time")
     plt.ylabel("Price")
@@ -61,8 +74,10 @@ def visualize_results(env):
     reward_history_agent_1 = [reward[0] for reward in env.reward_history]
     reward_history_agent_2 = [reward[1] for reward in env.reward_history]
     plt.figure(figsize=(12, 6))
-    plt.plot(reward_history_agent_1, label="Agent 1")
-    plt.plot(reward_history_agent_2, label="Agent 2")
+    if showAgent1:
+        plt.plot(reward_history_agent_1, label="Agent 1")
+    if showAgent2:
+        plt.plot(reward_history_agent_2, label="Agent 2")
     plt.title("Reward History: Agent 1 vs Agent 2")
     plt.xlabel("Time")
     plt.ylabel("Reward")
